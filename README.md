@@ -58,4 +58,5 @@ Contribuindo
 Contribuições são bem-vindas! Para sugerir melhorias ou relatar problemas, envie uma solicitação via "Issues" ou abra um pull request.
 
 Autor: Gabriel Matuck
+
 Contato: gabriel.matuck1@gmail.com
