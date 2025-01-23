@@ -1,0 +1,83 @@
+import pandas as pd
+import os
+
+# Diretório onde estão localizados os arquivos
+base_dir = "C:/automacao mkt/base de dados"
+
+# Lista para armazenar os DataFrames
+data_list = []
+
+# Carregar e concatenar os arquivos de 2013 a 2024
+for arquivo in os.listdir(base_dir):
+    if arquivo.endswith(".xlsx") and not arquivo.startswith("~$"):
+        caminho_arquivo = os.path.join(base_dir, arquivo)
+        try:
+            # Carregar o arquivo
+            df_temp = pd.read_excel(caminho_arquivo, engine="openpyxl")
+            data_list.append(df_temp)
+        except Exception as e:
+            print(f"Erro ao carregar o arquivo {arquivo}: {e}")
+
+# Concatenar todos os DataFrames
+if data_list:
+    data_final = pd.concat(data_list, ignore_index=True)
+else:
+    raise ValueError("Nenhum arquivo foi encontrado ou carregado corretamente.")
+
+# Limpar a coluna CLIENTE_NOME para remover espaços, vírgulas, pontos, etc.
+data_final["CLIENTE_NOME"] = data_final["CLIENTE_NOME"].str.strip()
+data_final["CLIENTE_NOME"] = data_final["CLIENTE_NOME"].str.replace(r'[.,]', '', regex=True)
+
+# Remover linhas onde o CLIENTE_NOME contém "AUTOMEC" (case insensitive)
+data_final = data_final[~data_final["CLIENTE_NOME"].str.contains("AUTOMEC", case=False, na=False)]
+
+# Remover linhas onde a DATA_VENDA está vazia
+data_final = data_final.dropna(subset=["DATA_VENDA"])
+
+# Converter a coluna DATA_VENDA para datetime, se não estiver
+data_final["DATA_VENDA"] = pd.to_datetime(data_final["DATA_VENDA"], errors="coerce")
+
+# Filtrar para manter linhas com EMPRESA_ID == 2 e REVENDA_ID == 2 quando há duplicatas na coluna CHASSI
+linhas_preferidas = data_final[(data_final["EMPRESA_ID"] == 2) & (data_final["REVENDA_ID"] == 2)]
+linhas_outras = data_final[~((data_final["EMPRESA_ID"] == 2) & (data_final["REVENDA_ID"] == 2))]
+data_final = pd.concat([linhas_preferidas, linhas_outras]).drop_duplicates(subset=["CHASSI"], keep="first")
+
+# Remover duplicatas de CHASSI entre clientes com base em DATA_VENDA e VALOR_VENDA
+data_final = data_final.sort_values(by=["CHASSI", "DATA_VENDA", "VALOR_VENDA"], ascending=[True, True, False])
+data_final = data_final.drop_duplicates(subset=["CHASSI", "DATA_VENDA"], keep="first")
+
+# Remover duplicatas na coluna CHASSI por cliente, mas manter múltiplas compras
+data_final = data_final.sort_values(by=["CLIENTE_NOME", "CLIENTE_ID", "CHASSI", "DATA_VENDA"])
+data_final = data_final.drop_duplicates(subset=["CLIENTE_NOME", "CLIENTE_ID", "CHASSI"], keep="first")
+
+# Calcular o período médio de compras em meses por cliente
+data_final["ANO_MES"] = data_final["DATA_VENDA"].dt.to_period("M")
+periodo_compras = (
+    data_final.groupby(["CLIENTE_NOME", "CLIENTE_ID", "CIDADE_CLIENTE"])
+    .agg(PERIODO_MEDIO_MES=("DATA_VENDA", lambda x: round((x.max() - x.min()).days / 30) if x.notna().sum() > 1 else 0))
+    .reset_index()
+)
+
+# Agrupar os dados por CLIENTE_NOME, CLIENTE_ID e CIDADE_CLIENTE e contar as compras
+resumo_compras = (
+    data_final.groupby(["CLIENTE_NOME", "CLIENTE_ID", "CIDADE_CLIENTE"])
+    .size()
+    .reset_index(name="QUANTIDADE_COMPRAS")
+)
+
+# Mesclar o período médio de compras com o resumo
+resultado_final = pd.merge(resumo_compras, periodo_compras, on=["CLIENTE_NOME", "CLIENTE_ID", "CIDADE_CLIENTE"], how="left")
+
+# Preencher períodos médios como 0 para clientes com apenas uma compra ou DATA_VENDA ausente
+resultado_final["PERIODO_MEDIO_MES"] = resultado_final["PERIODO_MEDIO_MES"].fillna(0).astype(int)
+
+# Criar um arquivo Excel com uma aba para filtro dinâmico
+arquivo_saida = "C:/automacao mkt/base de dados/quantidade_compras_por_cliente.xlsx"
+with pd.ExcelWriter(arquivo_saida, engine="openpyxl") as writer:
+    # Aba principal com resumo e dados detalhados
+    data_final.to_excel(writer, index=False, sheet_name="Dados Detalhados")
+
+    # Aba com resumo consolidado
+    resultado_final.to_excel(writer, index=False, sheet_name="Resumo")
+
+print(f"Arquivo gerado com sucesso: {arquivo_saida}")
